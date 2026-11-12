@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Thennaval AI",
+    "slug": "thennaval-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["android"],
+    "android": {
+      "package": "com.thennaval.ai",
+      "adaptiveIcon": {
+        "backgroundColor": "#0F5132"
+      },
+      "permissions": ["INTERNET"]
+    }
+  }
+}
