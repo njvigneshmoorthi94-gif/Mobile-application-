@@ -1,378 +1,371 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  SafeAreaView, View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert, Linking, RefreshControl, Switch, StatusBar
-} from 'react-native';
 
-const API_URL = 'http://192.168.1.10:3000'; // Replace with your Server IP or Cloud HTTPS URL
+import React, {useEffect, useState} from 'react';
+import {
+  SafeAreaView, View, Text, TextInput,
+  TouchableOpacity, ScrollView, Alert, StyleSheet
+} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const KEY = 'THENNAVAL_DATA';
+
+const initial = {
+  products: [],
+  sales: [],
+  payments: [],
+  purchases: [],
+  customers: [],
+  expenses: []
+};
+
+const money = n => '₹' + Number(n || 0).toFixed(2);
 
 export default function App() {
-  const [tab, setTab] = useState('STOCK');
-  const [products, setProducts] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [dailySales, setDailySales] = useState([]);
-  const [refreshing, setRefreshing] = useState(false);
+  const [data, setData] = useState(initial);
+  const [page, setPage] = useState('Home');
+  const [ready, setReady] = useState(false);
 
-  const [pName, setPName] = useState('');
-  const [pSku, setPSku] = useState('');
-  const [pPrice, setPPrice] = useState('');
-  const [pStock, setPStock] = useState('');
+  const [name, setName] = useState('');
+  const [qty, setQty] = useState('1');
+  const [buy, setBuy] = useState('');
+  const [sell, setSell] = useState('');
+  const [customer, setCustomer] = useState('');
+  const [phone, setPhone] = useState('');
+  const [paid, setPaid] = useState('');
+  const [total, setTotal] = useState('');
 
-  const [custName, setCustName] = useState('');
-  const [custPhone, setCustPhone] = useState('');
-  const [cart, setCart] = useState({});
-  const [payStatus, setPayStatus] = useState('PAID');
-  const [payMethod, setPayMethod] = useState('UPI');
-  const [autoWaMode, setAutoWaMode] = useState(true);
-  const [directWaMode, setDirectWaMode] = useState(true);
-
-  const fetchAll = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const [pRes, oRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/api/products`),
-        fetch(`${API_URL}/api/orders`),
-        fetch(`${API_URL}/api/sales/daily`)
-      ]);
-      setProducts(await pRes.json());
-      setOrders(await oRes.json());
-      setDailySales(await sRes.json());
-    } catch (e) {
-      Alert.alert('Connection Error', 'Ensure Thennaval backend server is running and API_URL is reachable.');
-    }
-    setRefreshing(false);
+  useEffect(() => {
+    AsyncStorage.getItem(KEY).then(value => {
+      if (value) setData({...initial, ...JSON.parse(value)});
+      setReady(true);
+    }).catch(() => setReady(true));
   }, []);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+    if (ready) AsyncStorage.setItem(KEY, JSON.stringify(data));
+  }, [data, ready]);
 
-  const adjustStock = async (id, delta) => {
-    await fetch(`${API_URL}/api/products/${id}/stock`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ delta })
-    });
-    fetchAll();
+  const save = (key, value) => {
+    setData(old => ({...old, [key]: value}));
   };
 
-  const addProduct = async () => {
-    if (!pName || !pPrice || !pStock) return Alert.alert('Missing Fields', 'Enter name, price, and stock.');
-    await fetch(`${API_URL}/api/products`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: pName,
-        sku: pSku || `SKU-${Date.now().toString().slice(-4)}`,
-        price: Number(pPrice),
-        stock: Number(pStock),
-        low_stock_threshold: 5
-      })
-    });
-    setPName(''); setPSku(''); setPPrice(''); setPStock('');
-    fetchAll();
-  };
+  const today = new Date().toISOString().slice(0, 10);
 
-  const openCustomerWhatsApp = (phone, message) => {
-    const clean = phone.replace(/\D/g, '');
-    const fullPhone = clean.startsWith('91') ? clean : `91${clean}`;
-    const url = `https://wa.me/${fullPhone}?text=${encodeURIComponent(message)}`;
-    Linking.openURL(url).catch(() => Alert.alert('Error', 'WhatsApp is not installed on this device.'));
-  };
+  const todaySales = data.sales.filter(s => s.date === today);
+  const salesTotal = todaySales.reduce((a, s) => a + s.total, 0);
+  const profit = todaySales.reduce((a, s) => a + s.profit, 0);
+  const lowStock = data.products.filter(p => p.qty <= p.min);
 
-  const submitOrder = async () => {
-    const selectedItems = products
-      .filter(p => (cart[p.id] || 0) > 0)
-      .map(p => ({ product_id: p.id, name: p.name, qty: cart[p.id], price: p.price }));
-
-    if (!custName || !custPhone || selectedItems.length === 0) {
-      return Alert.alert('Incomplete Order', 'Enter customer details and select at least 1 product.');
+  const addProduct = () => {
+    if (!name.trim() || Number(qty) < 0) {
+      return Alert.alert('Enter valid product details');
     }
 
-    const res = await fetch(`${API_URL}/api/orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        customer_name: custName,
-        customer_phone: custPhone,
-        items: selectedItems,
-        payment_status: payStatus,
-        payment_method: payMethod,
-        send_auto_wa: autoWaMode
-      })
-    });
-    const data = await res.json();
+    const product = {
+      id: Date.now().toString(),
+      name: name.trim(),
+      qty: Number(qty),
+      buy: Number(buy || 0),
+      sell: Number(sell || 0),
+      min: 2
+    };
 
-    const summary = selectedItems.map(i => `• ${i.name} x${i.qty} = ₹${i.qty * i.price}`).join('\n');
-    const waText = `Vanakkam ${custName}!\nOrder #${data.id} confirmed with Thennaval:\n${summary}\nTotal: ₹${data.total_amount}\nPayment: ${payStatus} (${payMethod})`;
+    save('products', [...data.products, product]);
+    setName('');
+    setQty('1');
+    setBuy('');
+    setSell('');
+    Alert.alert('Success', 'Product added');
+  };
 
-    if (directWaMode) {
-      openCustomerWhatsApp(custPhone, waText);
+  const addPurchase = () => {
+    if (!name.trim() || Number(qty) < 1) {
+      return Alert.alert('Enter product and quantity');
     }
 
-    setCustName(''); setCustPhone(''); setCart({});
-    fetchAll();
-    setTab('ORDERS');
+    const existing = data.products.find(
+      p => p.name.toLowerCase() === name.trim().toLowerCase()
+    );
+
+    if (existing) {
+      save('products', data.products.map(p =>
+        p.id === existing.id
+          ? {...p, qty: p.qty + Number(qty)}
+          : p
+      ));
+    } else {
+      save('products', [...data.products, {
+        id: Date.now().toString(),
+        name: name.trim(),
+        qty: Number(qty),
+        buy: Number(buy || 0),
+        sell: Number(sell || 0),
+        min: 2
+      }]);
+    }
+
+    save('purchases', [{
+      id: Date.now().toString(),
+      date: today,
+      name,
+      qty: Number(qty),
+      amount: Number(buy || 0) * Number(qty)
+    }, ...data.purchases]);
+
+    Alert.alert('Purchase recorded');
   };
 
-  const markOrderPaid = async (order) => {
-    await fetch(`${API_URL}/api/orders/${order.id}/pay`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: order.total_amount, method: 'UPI', send_auto_wa: true })
-    });
-    fetchAll();
+  const recordSale = (product) => {
+    Alert.alert('Sell product', 'Choose quantity', [
+      {text: 'Cancel'},
+      {
+        text: 'Sell 1',
+        onPress: () => {
+          if (product.qty < 1) {
+            return Alert.alert('Out of stock');
+          }
+
+          const sale = {
+            id: Date.now().toString(),
+            date: today,
+            product: product.name,
+            qty: 1,
+            total: product.sell,
+            profit: product.sell - product.buy
+          };
+
+          save('products', data.products.map(p =>
+            p.id === product.id
+              ? {...p, qty: p.qty - 1}
+              : p
+          ));
+
+          save('sales', [sale, ...data.sales]);
+          Alert.alert('Sale completed');
+        }
+      }
+    ]);
   };
 
-  const inStockCount = products.filter(p => p.status === 'IN_STOCK').length;
-  const lowStockCount = products.filter(p => p.status === 'LOW_STOCK').length;
-  const outStockCount = products.filter(p => p.status === 'OUT_OF_STOCK').length;
+  const addPayment = () => {
+    const t = Number(total);
+    const p = Number(paid);
+
+    if (!customer.trim() || t <= 0 || p < 0 || p > t) {
+      return Alert.alert('Check payment details');
+    }
+
+    save('payments', [{
+      id: Date.now().toString(),
+      date: today,
+      customer,
+      phone,
+      total: t,
+      paid: p,
+      balance: t - p
+    }, ...data.payments]);
+
+    setCustomer('');
+    setPhone('');
+    setTotal('');
+    setPaid('');
+    Alert.alert('Payment saved');
+  };
+
+  const field = (value, change, placeholder, numeric = false) => (
+    <TextInput
+      style={styles.input}
+      value={value}
+      onChangeText={change}
+      placeholder={placeholder}
+      placeholderTextColor="#9ca3af"
+      keyboardType={numeric ? 'numeric' : 'default'}
+    />
+  );
+
+  const button = (label, action) => (
+    <TouchableOpacity style={styles.button} onPress={action}>
+      <Text style={styles.buttonText}>{label}</Text>
+    </TouchableOpacity>
+  );
+
+  const card = (label, value) => (
+    <View style={styles.card}>
+      <Text style={styles.muted}>{label}</Text>
+      <Text style={styles.value}>{value}</Text>
+    </View>
+  );
+
+  const row = (title, value) => (
+    <View style={styles.row}>
+      <Text style={styles.white}>{title}</Text>
+      <Text style={styles.white}>{value}</Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar backgroundColor="#0F5132" barStyle="light-content" />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>THENNAVAL AI</Text>
-        <Text style={styles.headerSub}>Owner Auto-Alerts: ON • Customer WA: Dual Mode</Text>
+        <Text style={styles.brand}>THENNAVAL AI</Text>
+        <Text style={styles.muted}>Spare Parts Management</Text>
       </View>
 
-      <View style={styles.navBar}>
-        {['STOCK', 'NEW_ORDER', 'ORDERS', 'SALES'].map(t => (
-          <TouchableOpacity
-            key={t}
-            style={[styles.navBtn, tab === t && styles.navBtnActive]}
-            onPress={() => setTab(t)}
-          >
-            <Text style={[styles.navText, tab === t && styles.navTextActive]}>
-              {t.replace('_', ' ')}
-            </Text>
+      <ScrollView style={styles.content}>
+
+        {page === 'Home' && <>
+          <Text style={styles.heading}>Dashboard</Text>
+          <View style={styles.grid}>
+            {card("Today's Sales", money(salesTotal))}
+            {card("Today's Profit", money(profit))}
+            {card("Total Products", data.products.length)}
+            {card("Low Stock", lowStock.length)}
+            {card("Sales Count", todaySales.length)}
+            {card("Payments", data.payments.length)}
+          </View>
+
+          <Text style={styles.heading}>Stock Alerts</Text>
+          {lowStock.map(p => row(
+            p.name,
+            p.qty === 0 ? 'EMPTY' : `LOW: ${p.qty}`
+          ))}
+        </>}
+
+        {page === 'Stock' && <>
+          <Text style={styles.heading}>Stock Management</Text>
+          {field(name, setName, 'Product name')}
+          {field(qty, setQty, 'Quantity', true)}
+          {field(buy, setBuy, 'Purchase price', true)}
+          {field(sell, setSell, 'Selling price', true)}
+          {button('Add Product', addProduct)}
+          {button('Record Purchase', addPurchase)}
+
+          <Text style={styles.heading}>Available Products</Text>
+          {data.products.map(p => (
+            <View style={styles.card} key={p.id}>
+              <Text style={styles.white}>{p.name}</Text>
+              <Text style={styles.muted}>Stock: {p.qty}</Text>
+              <Text style={styles.muted}>
+                Buy {money(p.buy)} | Sell {money(p.sell)}
+              </Text>
+              {button('Sell 1', () => recordSale(p))}
+            </View>
+          ))}
+        </>}
+
+        {page === 'Orders' && <>
+          <Text style={styles.heading}>Sales History</Text>
+          {data.sales.map(s => row(
+            `${s.product} × ${s.qty}`,
+            money(s.total)
+          ))}
+        </>}
+
+        {page === 'Payments' && <>
+          <Text style={styles.heading}>Payment Management</Text>
+          {field(customer, setCustomer, 'Customer name')}
+          {field(phone, setPhone, 'WhatsApp number')}
+          {field(total, setTotal, 'Bill amount', true)}
+          {field(paid, setPaid, 'Amount paid', true)}
+          {button('Save Payment', addPayment)}
+
+          <Text style={styles.heading}>Payment Records</Text>
+          {data.payments.map(p => (
+            <View style={styles.card} key={p.id}>
+              <Text style={styles.white}>{p.customer}</Text>
+              <Text style={styles.muted}>
+                Total: {money(p.total)}
+              </Text>
+              <Text style={styles.muted}>
+                Paid: {money(p.paid)}
+              </Text>
+              <Text style={styles.alert}>
+                Balance: {money(p.balance)}
+              </Text>
+            </View>
+          ))}
+        </>}
+
+        {page === 'Reports' && <>
+          <Text style={styles.heading}>Business Reports</Text>
+          {card('Today Sales', money(salesTotal))}
+          {card('Today Profit', money(profit))}
+          {card('Total Stock Units',
+            data.products.reduce((a, p) => a + p.qty, 0))}
+          {card('Purchase Entries', data.purchases.length)}
+          {card('Payment Entries', data.payments.length)}
+        </>}
+
+        {page === 'More' && <>
+          <Text style={styles.heading}>Business Management</Text>
+          {button('Customers', () => Alert.alert(
+            'Customer management',
+            'Customer records are available through payment entries.'
+          ))}
+          {button('Suppliers', () => Alert.alert(
+            'Supplier management',
+            'Supplier module needs backend implementation.'
+          ))}
+          {button('Expenses', () => Alert.alert(
+            'Expenses',
+            'Expense module needs implementation.'
+          ))}
+          {button('WhatsApp', () => Alert.alert(
+            'WhatsApp integration',
+            'Official WhatsApp Cloud API setup is required.'
+          ))}
+        </>}
+
+      </ScrollView>
+
+      <View style={styles.navigation}>
+        {['Home', 'Stock', 'Orders', 'Payments', 'Reports', 'More'].map(t => (
+          <TouchableOpacity key={t} onPress={() => setPage(t)}>
+            <Text style={[
+              styles.navText,
+              page === t && styles.active
+            ]}>{t}</Text>
           </TouchableOpacity>
         ))}
       </View>
-
-      <ScrollView
-        style={styles.body}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchAll} />}
-      >
-        {tab === 'STOCK' && (
-          <View>
-            <View style={styles.kpiRow}>
-              <View style={[styles.kpiBox, { backgroundColor: '#D1E7DD' }]}>
-                <Text style={styles.kpiNum}>{inStockCount}</Text>
-                <Text style={styles.kpiLbl}>In Stock</Text>
-              </View>
-              <View style={[styles.kpiBox, { backgroundColor: '#FFF3CD' }]}>
-                <Text style={styles.kpiNum}>{lowStockCount}</Text>
-                <Text style={styles.kpiLbl}>Low Stock</Text>
-              </View>
-              <View style={[styles.kpiBox, { backgroundColor: '#F8D7DA' }]}>
-                <Text style={styles.kpiNum}>{outStockCount}</Text>
-                <Text style={styles.kpiLbl}>Out of Stock</Text>
-              </View>
-            </View>
-
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Add New Stock Item</Text>
-              <TextInput style={styles.input} placeholder="Product Name" value={pName} onChangeText={setPName} />
-              <View style={styles.row}>
-                <TextInput style={[styles.input, { flex: 1, marginRight: 6 }]} placeholder="SKU" value={pSku} onChangeText={setPSku} />
-                <TextInput style={[styles.input, { flex: 1, marginRight: 6 }]} placeholder="Price ₹" keyboardType="numeric" value={pPrice} onChangeText={setPPrice} />
-                <TextInput style={[styles.input, { flex: 1 }]} placeholder="Qty" keyboardType="numeric" value={pStock} onChangeText={setPStock} />
-              </View>
-              <TouchableOpacity style={styles.primaryBtn} onPress={addProduct}>
-                <Text style={styles.primaryBtnText}>+ Save Product</Text>
-              </TouchableOpacity>
-            </View>
-
-            {products.map(p => (
-              <View key={p.id} style={styles.card}>
-                <View style={styles.rowBetween}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.itemTitle}>{p.name}</Text>
-                    <Text style={styles.itemSub}>SKU: {p.sku} • ₹{p.price}</Text>
-                  </View>
-                  <View style={[
-                    styles.badge,
-                    p.status === 'OUT_OF_STOCK' ? styles.badgeRed :
-                    p.status === 'LOW_STOCK' ? styles.badgeYellow : styles.badgeGreen
-                  ]}>
-                    <Text style={styles.badgeText}>{p.status.replace(/_/g, ' ')} ({p.stock})</Text>
-                  </View>
-                </View>
-
-                <View style={[styles.row, { marginTop: 10 }]}>
-                  <TouchableOpacity style={styles.stepBtn} onPress={() => adjustStock(p.id, -1)}>
-                    <Text style={styles.stepBtnText}>-1</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.stepBtn} onPress={() => adjustStock(p.id, 1)}>
-                    <Text style={styles.stepBtnText}>+1</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.stepBtn} onPress={() => adjustStock(p.id, 10)}>
-                    <Text style={styles.stepBtnText}>+10 Restock</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {tab === 'NEW_ORDER' && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Create Customer Order</Text>
-            <TextInput style={styles.input} placeholder="Customer Name" value={custName} onChangeText={setCustName} />
-            <TextInput style={styles.input} placeholder="WhatsApp Number (e.g. 9876543210)" keyboardType="phone-pad" value={custPhone} onChangeText={setCustPhone} />
-
-            <Text style={styles.sectionLabel}>Select Items:</Text>
-            {products.map(p => (
-              <View key={p.id} style={styles.rowBetween}>
-                <Text style={{ flex: 1 }}>{p.name} (₹{p.price}) [{p.stock} left]</Text>
-                <View style={styles.row}>
-                  <TouchableOpacity
-                    style={styles.miniBtn}
-                    onPress={() => setCart({ ...cart, [p.id]: Math.max(0, (cart[p.id] || 0) - 1) })}
-                  >
-                    <Text>-</Text>
-                  </TouchableOpacity>
-                  <Text style={{ marginHorizontal: 10, fontWeight: 'bold' }}>{cart[p.id] || 0}</Text>
-                  <TouchableOpacity
-                    style={styles.miniBtn}
-                    onPress={() => {
-                      if ((cart[p.id] || 0) < p.stock) {
-                        setCart({ ...cart, [p.id]: (cart[p.id] || 0) + 1 });
-                      }
-                    }}
-                  >
-                    <Text>+</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            <Text style={styles.sectionLabel}>Payment Status & Method:</Text>
-            <View style={styles.row}>
-              {['PAID', 'PENDING'].map(st => (
-                <TouchableOpacity
-                  key={st}
-                  style={[styles.chip, payStatus === st && styles.chipActive]}
-                  onPress={() => setPayStatus(st)}
-                >
-                  <Text style={payStatus === st ? { color: '#fff' } : {}}>{st}</Text>
-                </TouchableOpacity>
-              ))}
-              {['UPI', 'CASH', 'CARD'].map(m => (
-                <TouchableOpacity
-                  key={m}
-                  style={[styles.chip, payMethod === m && styles.chipActive]}
-                  onPress={() => setPayMethod(m)}
-                >
-                  <Text style={payMethod === m ? { color: '#fff' } : {}}>{m}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View style={styles.switchRow}>
-              <Text>Mode A: Auto Cloud API WhatsApp</Text>
-              <Switch value={autoWaMode} onValueChange={setAutoWaMode} />
-            </View>
-            <View style={styles.switchRow}>
-              <Text>Mode B: Open WhatsApp App Chat</Text>
-              <Switch value={directWaMode} onValueChange={setDirectWaMode} />
-            </View>
-
-            <TouchableOpacity style={styles.primaryBtn} onPress={submitOrder}>
-              <Text style={styles.primaryBtnText}>Confirm Order & Send Alerts</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {tab === 'ORDERS' && orders.map(o => (
-          <View key={o.id} style={styles.card}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.itemTitle}>Order #{o.id} • {o.customer_name}</Text>
-              <Text style={{ fontWeight: 'bold', color: o.payment_status === 'PAID' ? '#198754' : '#DC3545' }}>
-                {o.payment_status} (₹{o.total_amount})
-              </Text>
-            </View>
-            <Text style={styles.itemSub}>{o.customer_phone} • {o.created_at}</Text>
-            {o.items.map((it, idx) => (
-              <Text key={idx} style={{ fontSize: 13, marginTop: 2 }}>• {it.name} x{it.qty} = ₹{it.qty * it.price}</Text>
-            ))}
-
-            <View style={[styles.row, { marginTop: 10 }]}>
-              {o.payment_status !== 'PAID' && (
-                <TouchableOpacity style={[styles.stepBtn, { backgroundColor: '#198754' }]} onPress={() => markOrderPaid(o)}>
-                  <Text style={{ color: '#fff', fontWeight: 'bold' }}>Mark Paid (UPI)</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                style={[styles.stepBtn, { backgroundColor: '#25D366' }]}
-                onPress={() => openCustomerWhatsApp(
-                  o.customer_phone,
-                  `Hi ${o.customer_name}, update on Thennaval Order #${o.id}: Amount ₹${o.total_amount} (${o.payment_status}).`
-                )}
-              >
-                <Text style={{ color: '#fff', fontWeight: 'bold' }}>WhatsApp Customer</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ))}
-
-        {tab === 'SALES' && (
-          <View>
-            {dailySales.map((d, idx) => (
-              <View key={idx} style={styles.card}>
-                <View style={styles.rowBetween}>
-                  <Text style={styles.itemTitle}>{d.sale_date}</Text>
-                  <Text style={styles.itemTitle}>₹{d.gross_sales}</Text>
-                </View>
-                <Text style={styles.itemSub}>Total Orders: {d.total_orders}</Text>
-                <View style={[styles.rowBetween, { marginTop: 8 }]}>
-                  <Text style={{ color: '#198754', fontWeight: 'bold' }}>Collected: ₹{d.collected_amount}</Text>
-                  <Text style={{ color: '#DC3545', fontWeight: 'bold' }}>Pending: ₹{d.pending_amount}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F4F6F8' },
-  header: { backgroundColor: '#0F5132', padding: 16 },
-  headerTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  headerSub: { color: '#D1E7DD', fontSize: 12, marginTop: 2 },
-  navBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#ddd' },
-  navBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
-  navBtnActive: { borderBottomWidth: 3, borderColor: '#0F5132' },
-  navText: { fontSize: 12, fontWeight: '600', color: '#666' },
-  navTextActive: { color: '#0F5132', fontWeight: 'bold' },
-  body: { padding: 12 },
-  kpiRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  kpiBox: { flex: 1, padding: 12, borderRadius: 8, marginHorizontal: 4, alignItems: 'center' },
-  kpiNum: { fontSize: 20, fontWeight: 'bold', color: '#111' },
-  kpiLbl: { fontSize: 12, color: '#333' },
-  card: { backgroundColor: '#fff', padding: 14, borderRadius: 10, marginBottom: 12, elevation: 2 },
-  cardTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 10, color: '#0F5132' },
-  input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 6, padding: 10, marginBottom: 8, backgroundColor: '#FAFAFA' },
-  row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 4 },
-  primaryBtn: { backgroundColor: '#0F5132', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 8 },
-  primaryBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
-  itemTitle: { fontSize: 15, fontWeight: 'bold', color: '#222' },
-  itemSub: { fontSize: 12, color: '#666', marginTop: 2 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  badgeGreen: { backgroundColor: '#D1E7DD' },
-  badgeYellow: { backgroundColor: '#FFF3CD' },
-  badgeRed: { backgroundColor: '#F8D7DA' },
-  badgeText: { fontSize: 11, fontWeight: 'bold' },
-  stepBtn: { backgroundColor: '#E9ECEF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, marginRight: 8 },
-  stepBtnText: { fontWeight: 'bold', color: '#222' },
-  sectionLabel: { fontWeight: 'bold', marginTop: 10, marginBottom: 6 },
-  miniBtn: { borderWidth: 1, borderColor: '#aaa', width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 4 },
-  chip: { borderWidth: 1, borderColor: '#0F5132', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, marginRight: 6, marginBottom: 6 },
-  chipActive: { backgroundColor: '#0F5132' },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 6 }
+  container: {flex: 1, backgroundColor: '#0b1220'},
+  header: {padding: 20, backgroundColor: '#14243c'},
+  brand: {fontSize: 23, color: '#fff', fontWeight: '900'},
+  content: {padding: 15},
+  heading: {
+    color: '#fff', fontSize: 20, fontWeight: 'bold',
+    marginTop: 15, marginBottom: 12
+  },
+  grid: {flexDirection: 'row', flexWrap: 'wrap'},
+  card: {
+    backgroundColor: '#172a44', padding: 15,
+    borderRadius: 12, margin: 4, flexGrow: 1, minWidth: '45%'
+  },
+  value: {fontSize: 21, color: '#fff', fontWeight: 'bold', marginTop: 8},
+  muted: {color: '#9caec5', marginTop: 5},
+  white: {color: '#fff', fontWeight: 'bold'},
+  alert: {color: '#ff7979', marginTop: 5},
+  input: {
+    backgroundColor: '#172a44', color: '#fff',
+    padding: 14, borderRadius: 10, marginBottom: 10
+  },
+  button: {
+    backgroundColor: '#2563eb', padding: 13,
+    borderRadius: 10, marginVertical: 5
+  },
+  buttonText: {color: '#fff', textAlign: 'center', fontWeight: 'bold'},
+  row: {
+    backgroundColor: '#172a44', padding: 14,
+    marginBottom: 8, borderRadius: 10,
+    flexDirection: 'row', justifyContent: 'space-between'
+  },
+  navigation: {
+    flexDirection: 'row', justifyContent: 'space-around',
+    padding: 12, backgroundColor: '#14243c'
+  },
+  navText: {color: '#9caec5', fontSize: 10, fontWeight: 'bold'},
+  active: {color: '#60a5fa'}
 });
